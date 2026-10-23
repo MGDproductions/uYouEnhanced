@@ -13,7 +13,7 @@ on:
         type: boolean
       sdk_version:
         description: "iOS SDK Version"
-        default: "26.5"
+        default: "27.1"
         required: true
         type: string
       uyou_version:
@@ -69,7 +69,7 @@ concurrency:
 jobs:
   build:
     name: Build uYouEnhanced
-    runs-on: macos-latest
+    runs-on: ${{ startsWith(inputs.sdk_version, '27') && 'xcode-27' || 'macos-latest' }}
     permissions:
       contents: write
 
@@ -96,6 +96,18 @@ jobs:
           path: theos
           submodules: recursive
 
+      - name: Select Xcode
+        if: ${{ startsWith(inputs.sdk_version, '27') }}
+        run: |
+          XCODE="/Applications/Xcode_${{ inputs.sdk_version }}.app"
+          if [ -d "$XCODE" ]; then
+            sudo xcode-select -s "$XCODE"
+          else
+            echo "::warning::$XCODE not found, keeping default Xcode"
+          fi
+          xcodebuild -version
+          xcodebuild -showsdks | grep -i iphoneos
+
       - name: SDK Caching
         id: SDK
         uses: actions/cache@v6
@@ -106,11 +118,25 @@ jobs:
       - name: Download iOS SDK
         if: steps.SDK.outputs.cache-hit != 'true'
         run: |
+          set -euo pipefail
+          SDK="iPhoneOS${{ inputs.sdk_version }}.sdk"
           git clone --quiet -n --depth=1 --filter=tree:0 https://github.com/aricloverALT/sdks/ sdks
           cd sdks
-          git sparse-checkout set --no-cone iPhoneOS${{ inputs.sdk_version }}.sdk
-          git checkout --quiet
-          mv *.sdk $THEOS/sdks
+          AVAILABLE="$(git ls-tree --name-only HEAD)"
+          if grep -qx "$SDK" <<< "$AVAILABLE"; then
+            git sparse-checkout set --no-cone "$SDK"
+            git checkout --quiet
+            mv *.sdk $THEOS/sdks
+          else
+            echo "$SDK not in aricloverALT/sdks, using the runner's Xcode SDK"
+            ditto "$(xcrun --sdk iphoneos${{ inputs.sdk_version }} --show-sdk-path)" "$THEOS/sdks/$SDK"
+            # Xcode SDKs have no private framework stubs, so borrow them from the newest patched SDK
+            PATCHED="$(grep -E '^iPhoneOS[0-9.]+\.sdk$' <<< "$AVAILABLE" | sort -V | tail -n1)"
+            echo "Copying PrivateFrameworks from $PATCHED"
+            git sparse-checkout set --no-cone "$PATCHED/System/Library/PrivateFrameworks"
+            git checkout --quiet
+            ditto "$PATCHED/System/Library/PrivateFrameworks" "$THEOS/sdks/$SDK/System/Library/PrivateFrameworks"
+          fi
         env:
           THEOS: ${{ github.workspace }}/theos
 
@@ -200,6 +226,7 @@ jobs:
 
         env:
           THEOS: ${{ github.workspace }}/theos
+          SDK_VERSION: ${{ inputs.sdk_version }}
           UYOU_VERSION: ${{ inputs.uyou_version }}
 
       - name: Clone Open in YouTube (Safari Extension)
