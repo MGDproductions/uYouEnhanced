@@ -221,13 +221,28 @@ jobs:
           sed -i '' "s/^BUNDLE_ID .*/BUNDLE_ID = ${{ inputs.bundle_id }}/" Makefile || echo "BUNDLE_ID = ${{ inputs.bundle_id }}" >> Makefile
           sed -i '' "s/^DISPLAY_NAME .*/DISPLAY_NAME = ${{ inputs.app_name }}/" Makefile || echo "DISPLAY_NAME = ${{ inputs.app_name }}" >> Makefile
           sed -i '' "s/^export TARGET .*/export TARGET = iphone:clang:${{ inputs.sdk_version }}:15.0/" Makefile || echo "export TARGET = iphone:clang:${{ inputs.sdk_version }}:15.0" >> Makefile
-          make package THEOS_PACKAGE_SCHEME=rootless IPA=Payload/YouTube.app FINALPACKAGE=1 YTUHD_ENABLED=${{ inputs.ytuhd && '1' || '0' }} SPONSORBLOCK_ENABLED=${{ inputs.sponsorblock && '1' || '0' }}
+          set -o pipefail
+          make package THEOS_PACKAGE_SCHEME=rootless IPA=Payload/YouTube.app FINALPACKAGE=1 YTUHD_ENABLED=${{ inputs.ytuhd && '1' || '0' }} SPONSORBLOCK_ENABLED=${{ inputs.sponsorblock && '1' || '0' }} 2>&1 | tee build.log
           echo "package=$(ls -t packages | head -n1)" >> $GITHUB_OUTPUT
 
         env:
           THEOS: ${{ github.workspace }}/theos
           SDK_VERSION: ${{ inputs.sdk_version }}
           UYOU_VERSION: ${{ inputs.uyou_version }}
+
+      - name: Show Build Errors
+        if: ${{ failure() && steps.build_package.outcome == 'failure' }}
+        run: |
+          echo "--- error lines from make output ---"
+          grep -nE '(error|fatal error):' main/build.log | head -50 || true
+          echo "--- errors from the latest Xcode activity log ---"
+          LOG="$(find ~/Library/Developer/Xcode/DerivedData main -name '*.xcactivitylog' -print0 2>/dev/null | xargs -0 ls -t 2>/dev/null | head -n1)"
+          if [ -n "$LOG" ]; then
+            echo "$LOG"
+            gunzip -c "$LOG" | strings | grep -iE 'error' | sort -u | head -50 || true
+          else
+            echo "No xcactivitylog found"
+          fi
 
       - name: Clone Open in YouTube (Safari Extension)
         run: |
